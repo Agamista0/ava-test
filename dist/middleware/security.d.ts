@@ -1,0 +1,23 @@
+import { Request, Response, NextFunction } from 'express';
+export declare const generalRateLimit: import("express-rate-limit").RateLimitRequestHandler;
+export declare const authRateLimit: import("express-rate-limit").RateLimitRequestHandler;
+export declare const chatRateLimit: import("express-rate-limit").RateLimitRequestHandler;
+export declare const supportRateLimit: import("express-rate-limit").RateLimitRequestHandler;
+export declare const speedLimiter: import("express-rate-limit").RateLimitRequestHandler;
+export declare const sanitizeInput: (req: Request, res: Response, next: NextFunction) => void;
+export declare const parameterPollutionProtection: import("express").RequestHandler<import("express-serve-static-core").ParamsDictionary, any, any, import("qs").ParsedQs, Record<string, any>>;
+export declare const handleValidationErrors: (req: Request, res: Response, next: NextFunction) => Response<any, Record<string, any>> | undefined;
+export declare const validateEmail: import("express-validator").ValidationChain;
+export declare const validatePassword: import("express-validator").ValidationChain;
+export declare const validateName: import("express-validator").ValidationChain;
+export declare const validateRole: import("express-validator").ValidationChain;
+export declare const validateMessage: import("express-validator").ValidationChain;
+export declare const validateConversationId: import("express-validator").ValidationChain;
+export declare const validateTicketId: import("express-validator").ValidationChain;
+export declare const validateStatus: import("express-validator").ValidationChain;
+export declare const validatePagination: import("express-validator").ValidationChain[];
+export declare const securityHeaders: (req: Request, res: Response, next: NextFunction) => void;
+export declare const securityLogger: (req: Request, res: Response, next: NextFunction) => void;
+export declare const bruteForceProtection: (req: Request, res: Response, next: NextFunction) => Promise<Response<any, Record<string, any>> | undefined>;
+export declare const validateFileUpload: (req: Request, res: Response, next: NextFunction) => void | Response<any, Record<string, any>>;
+//# sourceMappingURL=security.d.ts.map
