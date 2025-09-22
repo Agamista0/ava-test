@@ -1,10 +1,12 @@
-import { Router, Response } from 'express'
-import { requireAuth, AuthenticatedRequest } from '../auth'
+import { Router, Response, Request } from 'express'
+import fs from 'fs'
+import path from 'path'
 import { upload, handleUploadError, validateAudioFile, cleanupTempFiles } from '@/middleware/upload'
 import { ConversationService } from '@/services/conversation'
 import { OpenAIService } from '@/services/openai'
 import { SpeechService } from '@/services/speech'
 import { JiraService } from '@/services/jira'
+import { supabaseAdmin, createUserClient } from '@/lib/supabase'
 import {
   chatRateLimit,
   validateMessage,
@@ -14,17 +16,96 @@ import {
   validateFileUpload
 } from '@/middleware/security'
 
+// Interface for authenticated request
+interface AuthenticatedRequest extends Request {
+  user?: any
+}
+
 const router = Router()
+
+// Authentication helper for chat routes
+const requireSupabaseAuth = async (req: any, res: any, next: any) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' })
+    }
+
+    const token = authHeader.split(' ')[1]
+    
+    // Verify the user is authenticated using Supabase
+    const userClient = createUserClient(token)
+    const { data: { user }, error: authError } = await userClient.auth.getUser()
+    
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Invalid authentication token' })
+    }
+
+    // Add user to request object
+    req.user = user
+    next()
+  } catch (error) {
+    console.error('Authentication error:', error)
+    res.status(401).json({ error: 'Authentication failed' })
+  }
+}
 
 // Apply chat rate limiting to all routes
 router.use(chatRateLimit)
 
+// Serve audio files
+router.get('/audio/:filename', (req: Request, res: Response) => {
+  try {
+    const filename = req.params.filename;
+    const audioDir = path.join(process.cwd(), 'uploads', 'audio');
+    const filePath = path.join(audioDir, filename);
+    
+    // Security check: ensure the filename doesn't contain path traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid filename' });
+    }
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Audio file not found' });
+    }
+    
+    // Set appropriate headers for audio files
+    const ext = path.extname(filename).toLowerCase();
+    let mimeType = 'audio/mpeg'; // default
+    
+    switch (ext) {
+      case '.mp3':
+        mimeType = 'audio/mpeg';
+        break;
+      case '.wav':
+        mimeType = 'audio/wav';
+        break;
+      case '.m4a':
+        mimeType = 'audio/mp4';
+        break;
+      case '.ogg':
+        mimeType = 'audio/ogg';
+        break;
+    }
+    
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Accept-Ranges', 'bytes');
+    
+    // Send the file
+    res.sendFile(filePath);
+  } catch (error) {
+    console.error('Error serving audio file:', error);
+    res.status(500).json({ error: 'Failed to serve audio file' });
+  }
+});
+
 // Start new conversation endpoint
 router.post('/start-conversation',
-  requireAuth,
+  requireSupabaseAuth,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = req.user!.sub
+      const userId = req.user!.id
 
       // Create a new conversation
       const conversation = await ConversationService.createConversation(userId)
@@ -48,7 +129,7 @@ router.post('/start-conversation',
 
 // Send message endpoint (handles both text and voice)
 router.post('/send-message',
-  requireAuth,
+  requireSupabaseAuth,
   upload.single('audio'),
   handleUploadError,
   validateAudioFile,
@@ -57,7 +138,7 @@ router.post('/send-message',
   handleValidationErrors,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = req.user!.sub
+      const userId = req.user!.id
       const { message, conversationId } = req.body
       const audioFile = req.file
 
@@ -91,14 +172,76 @@ router.post('/send-message',
       // Process voice message if audio file is provided
       if (audioFile) {
         try {
+          // Log detailed file information
+          console.log('📁 Uploaded audio file info:', {
+            originalname: audioFile.originalname,
+            mimetype: audioFile.mimetype,
+            size: audioFile.size,
+            destination: audioFile.destination,
+            filename: audioFile.filename,
+            path: audioFile.path
+          })
+
+          // Check if file has content
+          if (audioFile.size === 0) {
+            console.error('❌ Uploaded audio file is empty!')
+            return res.status(400).json({ 
+              error: 'Uploaded audio file is empty. Please try recording again.' 
+            })
+          }
+
+          // Check if file exists at the path
+          if (!fs.existsSync(audioFile.path)) {
+            console.error('❌ Audio file not found at path:', audioFile.path)
+            return res.status(400).json({ 
+              error: 'Audio file not found. Please try uploading again.' 
+            })
+          }
+
+          // Check file stats
+          const fileStats = fs.statSync(audioFile.path)
+          console.log('📊 File stats:', {
+            size: fileStats.size,
+            isFile: fileStats.isFile(),
+            modified: fileStats.mtime
+          })
+
+          if (fileStats.size === 0) {
+            console.error('❌ Audio file on disk is empty!')
+            return res.status(400).json({ 
+              error: 'Audio file appears to be empty. Please try recording again.' 
+            })
+          }
+
+          console.log('✅ Audio file validation passed, proceeding with transcription...')
+
           // Convert audio to text
           messageText = await SpeechService.transcribeAudioFile(audioFile.path);
 
           messageType = 'voice'
           
-          // In a real application, you would upload the audio file to cloud storage
-          // and store the URL. For now, we'll just use a placeholder
-          voiceUrl = `uploads/${audioFile.filename}`
+          // Create audio storage directory if it doesn't exist
+          const audioDir = path.join(process.cwd(), 'uploads', 'audio');
+          if (!fs.existsSync(audioDir)) {
+            fs.mkdirSync(audioDir, { recursive: true });
+          }
+          
+          // Generate unique filename for the audio file
+          const timestamp = Date.now();
+          const randomId = Math.random().toString(36).substring(2, 11);
+          const fileExtension = path.extname(audioFile.originalname) || '.mp3';
+          const permanentFileName = `audio_${timestamp}_${randomId}${fileExtension}`;
+          const permanentFilePath = path.join(audioDir, permanentFileName);
+          
+          // Copy the uploaded file to permanent storage
+          fs.copyFileSync(audioFile.path, permanentFilePath);
+          
+          // Create URL for accessing the audio file
+          voiceUrl = `/uploads/audio/${permanentFileName}`;
+          
+          console.log(`🎵 Audio file saved: ${permanentFilePath}`);
+          console.log(`🔗 Audio URL: ${voiceUrl}`);
+          
         } catch (error) {
           console.error('Speech-to-text conversion failed:', error)
           return res.status(400).json({ 
@@ -219,14 +362,14 @@ router.post('/send-message',
 
 // Get conversation messages
 router.get('/conversation/:conversationId/messages',
-  requireAuth,
+  requireSupabaseAuth,
   validateConversationId,
   validatePagination,
   handleValidationErrors,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { conversationId } = req.params
-      const userId = req.user!.sub
+      const userId = req.user!.id
 
       // Verify user has access to this conversation
       const conversation = await ConversationService.getConversation(conversationId)
@@ -261,12 +404,12 @@ router.get('/conversation/:conversationId/messages',
 
 // Get user's conversations
 router.get('/conversations',
-  requireAuth,
+  requireSupabaseAuth,
   validatePagination,
   handleValidationErrors,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = req.user!.sub
+      const userId = req.user!.id
       const conversations = await ConversationService.getUserConversations(userId)
       
       res.json({
@@ -287,17 +430,30 @@ router.get('/conversations',
 
 // Get current conversation (latest open conversation)
 router.get('/current-conversation', 
-  requireAuth,
+  requireSupabaseAuth,
   async (req: AuthenticatedRequest, res) => {
     try {
-      const userId = req.user!.sub
+      const userId = req.user!.id
       const conversation = await ConversationService.getOrCreateConversation(userId)
+      
+      // Get messages for this conversation
+      const messages = await ConversationService.getMessages(conversation.id)
       
       res.json({
         conversationId: conversation.id,
         status: conversation.status,
         createdAt: conversation.created_at,
-        jiraTicketId: conversation.jira_ticket_id
+        jiraTicketId: conversation.jira_ticket_id,
+        messages: messages.map(msg => ({
+          id: msg.id,
+          senderId: msg.sender_id,
+          senderName: msg.profiles?.name || 'User',
+          senderRole: msg.profiles?.role || 'user',
+          content: msg.content,
+          type: msg.message_type,
+          voiceUrl: msg.voice_url,
+          timestamp: msg.created_at
+        }))
       })
     } catch (error) {
       console.error('Get current conversation error:', error)

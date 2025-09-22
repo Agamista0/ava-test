@@ -17,15 +17,15 @@ const router = Router()
 
 // Apply auth rate limiting to all routes
 
-// router.use(authRateLimit)
+router.use(authRateLimit)
 
 // Register endpoint
 router.post('/register', [
-  // validateEmail,
-  // validatePassword,
-  // validateName,
-  // validateRole,
-  // handleValidationErrors
+  validateEmail,
+  validatePassword,
+  validateName,
+  validateRole,
+  handleValidationErrors
 ], async (req: AuthenticatedRequest, res: Response) => {
   const { email, password, name, role, avatar_url } = req.body
   const ipAddress = req.ip || 'unknown'
@@ -114,7 +114,7 @@ router.post('/register', [
   }
 })
 
-// Login endpoint
+// Login endpoint with 2FA support
 router.post('/login', [
   bruteForceProtection,
   validateEmail,
@@ -146,64 +146,33 @@ router.post('/login', [
       })
     }
 
-    // Authenticate with Supabase
-    const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password })
+    // Use the new 2FA-aware login method
+    const loginResult = await AuthService.loginWithCredentials(email, password, ipAddress, userAgent)
 
-    if (error || !data.user) {
-      // Log failed attempt
-      await AuthService.logLoginAttempt(email, ipAddress, userAgent, false, error?.message)
-      await AuthService.logSecurityEvent(
-        null,
-        'login_failed',
-        ipAddress,
-        userAgent,
-        { email, error: error?.message },
-        'warning'
-      )
-      return res.status(401).json({ error: error?.message || 'Invalid credentials' })
+    if (!loginResult.success) {
+      return res.status(401).json({ error: loginResult.error })
     }
 
-    // Get profile
-    const { data: profile, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('id', data.user.id)
-      .single()
-
-    if (profileError || !profile) {
-      await AuthService.logLoginAttempt(email, ipAddress, userAgent, false, 'Profile not found')
-      return res.status(401).json({ error: 'Profile not found' })
+    // If 2FA is required, return different response
+    if (loginResult.require2FA) {
+      return res.json({
+        success: true,
+        require2FA: true,
+        userId: loginResult.user!.id,
+        message: 'Please provide your 2FA token to complete login'
+      })
     }
 
-    // Create session
-    const sessionId = await AuthService.createSession(data.user.id, ipAddress, userAgent)
-
-    // Generate enhanced JWT tokens
-    const { accessToken, refreshToken } = AuthService.generateTokens(
-      data.user.id,
-      profile.role,
-      sessionId
-    )
-
-    // Log successful login
-    await AuthService.logLoginAttempt(email, ipAddress, userAgent, true)
-    await AuthService.logSecurityEvent(
-      data.user.id,
-      'login_success',
-      ipAddress,
-      userAgent,
-      { sessionId },
-      'info'
-    )
-
+    // Normal login (no 2FA) - return tokens
     res.json({
-      accessToken,
-      refreshToken,
+      success: true,
+      accessToken: loginResult.tokens!.accessToken,
+      refreshToken: loginResult.tokens!.refreshToken,
       user: {
-        id: data.user.id,
-        email: data.user.email,
-        role: profile.role,
-        name: profile.name
+        id: loginResult.user!.id,
+        email: loginResult.user!.email,
+        role: loginResult.profile!.role,
+        name: loginResult.profile!.name
       }
     })
   } catch (error) {

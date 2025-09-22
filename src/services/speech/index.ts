@@ -1,4 +1,6 @@
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { pipeline } from '@xenova/transformers';
 import { WaveFile } from 'wavefile';
 import ffmpeg from 'fluent-ffmpeg';
@@ -28,6 +30,39 @@ async function getTranscriber() {
 }
 
 export class SpeechService {
+  // Create transcriptions directory if it doesn't exist
+  private static ensureTranscriptionsDir(): string {
+    const transcriptionsDir = path.join(process.cwd(), 'transcriptions');
+    if (!fs.existsSync(transcriptionsDir)) {
+      fs.mkdirSync(transcriptionsDir, { recursive: true });
+    }
+    return transcriptionsDir;
+  }
+
+  // Save transcription to file for debugging
+  private static saveTranscriptionToFile(audioFilePath: string, transcription: string): string {
+    try {
+      const transcriptionsDir = this.ensureTranscriptionsDir();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const audioFileName = path.basename(audioFilePath, path.extname(audioFilePath));
+      const transcriptionFileName = `${timestamp}_${audioFileName}.txt`;
+      const transcriptionPath = path.join(transcriptionsDir, transcriptionFileName);
+      
+      const content = `Audio File: ${audioFilePath}
+Timestamp: ${new Date().toISOString()}
+Transcription: ${transcription}
+Length: ${transcription.length} characters
+`;
+      
+      fs.writeFileSync(transcriptionPath, content, 'utf8');
+      console.log(`📝 Transcription saved to: ${transcriptionPath}`);
+      return transcriptionPath;
+    } catch (error) {
+      console.error('Failed to save transcription to file:', error);
+      return '';
+    }
+  }
+
   static async transcribeAudioFile(audioFilePath: string): Promise<string> {
     try {
       const transcriber = await getTranscriber();
@@ -36,7 +71,14 @@ export class SpeechService {
       const audioData = await this.processAudioFile(audioFilePath);
 
       const result = await transcriber(audioData);
-      return result.text || '';
+      const transcription = result.text || '';
+      
+      // Save transcription to file for debugging
+      this.saveTranscriptionToFile(audioFilePath, transcription);
+      
+      console.log(`🎤 Audio transcribed: "${transcription}" (${transcription.length} chars)`);
+      
+      return transcription;
     } catch (error) {
       console.error('Speech transcription error:', error);
       throw new Error('Failed to transcribe audio file');
@@ -45,7 +87,7 @@ export class SpeechService {
 
   private static async convertToWav(inputPath: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const outputPath = `/tmp/converted_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.wav`;
+      const outputPath = path.join(os.tmpdir(), `converted_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.wav`);
 
       ffmpeg(inputPath)
         .toFormat('wav')
@@ -116,7 +158,7 @@ export class SpeechService {
     try {
       // For buffer-based transcription, we need to write the buffer to a temporary file
       // and then process it with wavefile
-      const tempFilePath = `/tmp/audio_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.${this.getFileExtension(mimeType)}`;
+      const tempFilePath = path.join(os.tmpdir(), `audio_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.${this.getFileExtension(mimeType)}`);
 
       // Write buffer to temporary file
       fs.writeFileSync(tempFilePath, audioBuffer);

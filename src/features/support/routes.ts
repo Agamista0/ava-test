@@ -32,10 +32,10 @@ const generateSupportCodeSchema = z.object({
 })
 
 const createSupportRequestSchema = z.object({
-  category: z.enum(['marketing', 'scheduling', 'content', 'social', 'administrative', 'other']),
+  category: z.enum(['marketing', 'scheduling', 'content', 'social', 'administrative', 'other']).optional(),
   title: z.string().min(5, 'Title must be at least 5 characters').max(100, 'Title cannot exceed 100 characters'),
   description: z.string().min(20, 'Description must be at least 20 characters').max(1000, 'Description cannot exceed 1000 characters'),
-  priority: z.enum(['low', 'medium', 'high']).default('medium'),
+  priority: z.enum(['low', 'medium', 'high']).optional(),
 })
 
 // Create support request endpoint

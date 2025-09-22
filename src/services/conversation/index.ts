@@ -5,10 +5,21 @@ export interface Message {
   id: string
   conversation_id: string
   sender_id: string
-  message_type: 'text' | 'voice'
+  message_type: 'text' | 'voice' | 'file' | 'system'
   content: string
   voice_url?: string
+  file_url?: string
+  file_name?: string
+  file_size?: number
+  is_edited?: boolean
+  edited_at?: string
   created_at: string
+  metadata?: any
+  profiles?: {
+    name: string
+    avatar_url?: string
+    role: string
+  }
 }
 
 export interface Conversation {
@@ -98,20 +109,47 @@ export class ConversationService {
           })
       }
 
+      // Build insert object conditionally to handle missing columns gracefully
+      const insertData: any = {
+        id: uuidv4(),
+        conversation_id: conversationId,
+        sender_id: senderId,
+        message_type: messageType,
+        content
+      }
+
+      // Only include voice_url if provided
+      if (voiceUrl) {
+        insertData.voice_url = voiceUrl
+      }
+
       const { data, error } = await supabaseAdmin
         .from('messages')
-        .insert({
-          id: uuidv4(),
-          conversation_id: conversationId,
-          sender_id: senderId,
-          message_type: messageType,
-          content,
-          voice_url: voiceUrl
-        })
+        .insert(insertData)
         .select()
         .single()
 
       if (error) {
+        // If voice_url column doesn't exist, try again without it
+        if (error.message.includes('voice_url') && voiceUrl) {
+          console.warn('⚠️ voice_url column not found, retrying without voice_url')
+          const fallbackData = { ...insertData }
+          delete fallbackData.voice_url
+          
+          const { data: retryData, error: retryError } = await supabaseAdmin
+            .from('messages')
+            .insert(fallbackData)
+            .select()
+            .single()
+          
+          if (retryError) {
+            throw new Error(`Failed to add message: ${retryError.message}`)
+          }
+          
+          console.log('✅ Message added successfully without voice_url')
+          return retryData
+        }
+        
         throw new Error(`Failed to add message: ${error.message}`)
       }
 
@@ -127,9 +165,19 @@ export class ConversationService {
    */
   static async getMessages(conversationId: string, limit: number = 50): Promise<Message[]> {
     try {
-      const { data, error } = await supabaseAdmin
+      // First, get all messages
+      const { data: messages, error } = await supabaseAdmin
         .from('messages')
-        .select('*')
+        .select(`
+          id,
+          conversation_id,
+          sender_id,
+          message_type,
+          content,
+          voice_url,
+          created_at,
+          metadata
+        `)
         .eq('conversation_id', conversationId)
         .order('created_at', { ascending: true })
         .limit(limit)
@@ -138,7 +186,61 @@ export class ConversationService {
         throw new Error(`Failed to fetch messages: ${error.message}`)
       }
 
-      return data || []
+      if (!messages || messages.length === 0) {
+        return []
+      }
+
+      // Get unique sender IDs
+      const senderIds = [...new Set(messages.map(msg => msg.sender_id))]
+      
+      // Fetch profile data for all senders
+      const { data: profiles, error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .select('id, name, avatar_url, role')
+        .in('id', senderIds)
+
+      if (profileError) {
+        console.warn('Failed to fetch profiles, using fallback names:', profileError.message)
+      }
+
+      // Create a profile lookup map
+      const profileMap = new Map()
+      if (profiles) {
+        profiles.forEach(profile => {
+          profileMap.set(profile.id, profile)
+        })
+      }
+
+      // Transform the data to match our Message interface
+      const transformedMessages: Message[] = messages.map((item: any) => {
+        const profile = profileMap.get(item.sender_id)
+        return {
+          id: item.id,
+          conversation_id: item.conversation_id,
+          sender_id: item.sender_id,
+          message_type: item.message_type,
+          content: item.content,
+          voice_url: item.voice_url,
+          file_url: undefined, // Not available in current schema
+          file_name: undefined, // Not available in current schema
+          file_size: undefined, // Not available in current schema
+          is_edited: false, // Default value since column doesn't exist
+          edited_at: undefined, // Not available in current schema
+          created_at: item.created_at,
+          metadata: item.metadata,
+          profiles: profile ? {
+            name: profile.name || 'User',
+            avatar_url: profile.avatar_url,
+            role: profile.role || 'user'
+          } : {
+            name: 'User',
+            avatar_url: null,
+            role: 'user'
+          }
+        }
+      })
+
+      return transformedMessages
     } catch (error) {
       console.error('Get messages error:', error)
       throw new Error('Failed to fetch messages')

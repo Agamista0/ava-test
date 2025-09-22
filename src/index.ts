@@ -13,9 +13,12 @@ import {
   securityLogger
 } from '@/middleware/security'
 import authRoutes from './features/auth/routes'
+import twoFARoutes from './features/auth/twofa-routes'
+import profileRoutes from './features/auth/profile-routes'
 import refreshRoutes from './features/auth/refresh'
 import chatRoutes from './features/chat/routes'
 import supportRoutes from './features/chat/support-routes'
+import supportRequestRoutes from './features/support/routes'
 import AuthCleanupService from './services/auth/cleanup'
 
 
@@ -53,7 +56,13 @@ app.use(helmet({
 // CORS configuration
 const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    const allowedOrigins = process.env.FRONTEND_URL?.split(',') || ['http://localhost:3000', 'http://localhost:8081']
+    const allowedOrigins = process.env.FRONTEND_URL?.split(',') || [
+      'http://localhost:3000', 
+      'http://localhost:8081',
+      'http://localhost:8080',
+      'http://127.0.0.1:8081',
+      'http://127.0.0.1:3000'
+    ]
 
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true)
@@ -61,16 +70,29 @@ const corsOptions = {
     if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
       callback(null, true)
     } else {
+      console.log(`CORS: Origin ${origin} not allowed. Allowed origins:`, allowedOrigins)
       callback(new Error('Not allowed by CORS'), false)
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset']
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Cache-Control',
+    'X-File-Name'
+  ],
+  exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+  optionsSuccessStatus: 200 // some legacy browsers (IE11, various SmartTVs) choke on 204
 }
 
 app.use(cors(corsOptions))
+
+// Explicit preflight handler for all routes
+app.options('*', cors(corsOptions))
 
 // Body parsing middleware
 app.use(express.json({
@@ -114,9 +136,12 @@ app.post('/test', (req, res) => {
 
 // API routes
 app.use('/api/auth', authRoutes)
+app.use('/api/auth', twoFARoutes)
+app.use('/api/auth', profileRoutes)
 app.use('/api/auth', refreshRoutes)
 app.use('/api/chat', chatRoutes)
-app.use('/api/support', supportRoutes)
+app.use('/api/chat/support', supportRoutes)
+app.use('/api/support', supportRequestRoutes)
 
 
 // 404 handler

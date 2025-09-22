@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase'
+import { TwoFAService } from './twofa'
 
 export interface TokenPayload {
   sub: string
@@ -365,6 +366,171 @@ export class AuthService {
         })
     } catch (error) {
       console.error('Failed to log security event:', error)
+    }
+  }
+
+  /**
+   * Check if user has 2FA enabled
+   */
+  static async is2FAEnabled(userId: string): Promise<boolean> {
+    return await TwoFAService.is2FAEnabled(userId)
+  }
+
+  /**
+   * Verify 2FA token for a user
+   */
+  static async verify2FAToken(userId: string, token: string): Promise<boolean> {
+    return await TwoFAService.verifyToken(userId, token)
+  }
+
+  /**
+   * Enhanced login method that handles 2FA flow
+   */
+  static async loginWithCredentials(
+    email: string,
+    password: string,
+    ipAddress: string,
+    userAgent: string
+  ): Promise<{
+    success: boolean
+    user?: any
+    profile?: any
+    tokens?: { accessToken: string; refreshToken: string }
+    require2FA?: boolean
+    sessionId?: string
+    error?: string
+  }> {
+    try {
+      // Authenticate with Supabase
+      const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password })
+
+      if (error || !data.user) {
+        await this.logLoginAttempt(email, ipAddress, userAgent, false, error?.message)
+        return { success: false, error: error?.message || 'Invalid credentials' }
+      }
+
+      // Get profile
+      const { data: profile, error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single()
+
+      if (profileError || !profile) {
+        await this.logLoginAttempt(email, ipAddress, userAgent, false, 'Profile not found')
+        return { success: false, error: 'Profile not found' }
+      }
+
+      // Check if user has 2FA enabled
+      const has2FA = await this.is2FAEnabled(data.user.id)
+
+      if (has2FA) {
+        // User has 2FA enabled, don't return tokens yet
+        await this.logLoginAttempt(email, ipAddress, userAgent, true, '2FA required')
+        return {
+          success: true,
+          user: data.user,
+          profile,
+          require2FA: true
+        }
+      }
+
+      // User doesn't have 2FA, proceed with normal login
+      const sessionId = await this.createSession(data.user.id, ipAddress, userAgent)
+      const { accessToken, refreshToken } = this.generateTokens(
+        data.user.id,
+        profile.role,
+        sessionId
+      )
+
+      await this.logLoginAttempt(email, ipAddress, userAgent, true)
+      await this.logSecurityEvent(
+        data.user.id,
+        'login_success',
+        ipAddress,
+        userAgent,
+        { sessionId },
+        'info'
+      )
+
+      return {
+        success: true,
+        user: data.user,
+        profile,
+        tokens: { accessToken, refreshToken },
+        sessionId
+      }
+    } catch (error) {
+      console.error('Login error:', error)
+      return { success: false, error: 'Login failed' }
+    }
+  }
+
+  /**
+   * Complete 2FA login after token verification
+   */
+  static async complete2FALogin(
+    userId: string,
+    token: string,
+    ipAddress: string,
+    userAgent: string
+  ): Promise<{
+    success: boolean
+    tokens?: { accessToken: string; refreshToken: string }
+    sessionId?: string
+    error?: string
+  }> {
+    try {
+      // Verify 2FA token
+      const isValidToken = await this.verify2FAToken(userId, token)
+      if (!isValidToken) {
+        await this.logSecurityEvent(
+          userId,
+          'login_2fa_failed',
+          ipAddress,
+          userAgent,
+          { token_prefix: token.substring(0, 2) + '...' },
+          'warning'
+        )
+        return { success: false, error: 'Invalid 2FA token' }
+      }
+
+      // Get user profile for role
+      const { data: profile, error: profileError } = await supabaseAdmin
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single()
+
+      if (profileError || !profile) {
+        return { success: false, error: 'Profile not found' }
+      }
+
+      // Create session and generate tokens
+      const sessionId = await this.createSession(userId, ipAddress, userAgent)
+      const { accessToken, refreshToken } = this.generateTokens(
+        userId,
+        profile.role,
+        sessionId
+      )
+
+      await this.logSecurityEvent(
+        userId,
+        'login_2fa_success',
+        ipAddress,
+        userAgent,
+        { sessionId },
+        'info'
+      )
+
+      return {
+        success: true,
+        tokens: { accessToken, refreshToken },
+        sessionId
+      }
+    } catch (error) {
+      console.error('2FA login completion error:', error)
+      return { success: false, error: '2FA login failed' }
     }
   }
 }
