@@ -4,19 +4,15 @@ import { supabaseAdmin } from '@/lib'
 import { AuthService, TokenPayload } from '@/services/auth'
 
 export interface AuthenticatedRequest extends Request {
-  user?: {
-    id: string
-    email?: string
-    name?: string
-    [key: string]: any
-  }
+  user?: any  // Use any to avoid conflicts with Express's user type
   tokenPayload?: TokenPayload
   sessionId?: string
 }
 
 export const requireRole = (roles: string[]) => {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    if (!req.tokenPayload || !roles.includes(req.tokenPayload.role)) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const authReq = req as AuthenticatedRequest
+    if (!authReq.tokenPayload || !roles.includes(authReq.tokenPayload.role)) {
       return res.status(403).json({ error: 'Insufficient permissions' })
     }
     next()
@@ -24,11 +20,12 @@ export const requireRole = (roles: string[]) => {
 }
 
 export const authenticateUser = async (
-  req: AuthenticatedRequest,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
+    const authReq = req as AuthenticatedRequest
     const authHeader = req.headers.authorization
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -68,9 +65,9 @@ export const authenticateUser = async (
       await AuthService.updateSessionActivity(tokenPayload.sessionId)
     }
 
-    req.user = user
-    req.tokenPayload = tokenPayload
-    req.sessionId = tokenPayload.sessionId
+    authReq.user = user
+    authReq.tokenPayload = tokenPayload
+    authReq.sessionId = tokenPayload.sessionId
     next()
   } catch (error) {
     console.error('Authentication error:', error)
@@ -79,11 +76,12 @@ export const authenticateUser = async (
 }
 
 export const optionalAuth = async (
-  req: AuthenticatedRequest,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
+    const authReq = req as AuthenticatedRequest
     const authHeader = req.headers.authorization
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -93,9 +91,9 @@ export const optionalAuth = async (
       if (tokenPayload) {
         const { data: { user } } = await supabaseAdmin.auth.admin.getUserById(tokenPayload.sub)
         if (user) {
-          req.user = user
-          req.tokenPayload = tokenPayload
-          req.sessionId = tokenPayload.sessionId
+          authReq.user = user
+          authReq.tokenPayload = tokenPayload
+          authReq.sessionId = tokenPayload.sessionId
 
           // Update session activity
           if (tokenPayload.sessionId) {

@@ -9,11 +9,11 @@ export class AuthCleanupService {
    */
   static start(): void {
     if (this.isRunning) {
-      console.log('⚠️  Auth cleanup service is already running')
+      console.log('Auth cleanup service is already running')
       return
     }
 
-    console.log('🧹 Starting auth cleanup service...')
+    console.log('Starting auth cleanup service')
 
     // Run cleanup every hour
     cron.schedule('0 * * * *', async () => {
@@ -34,7 +34,7 @@ export class AuthCleanupService {
     }, 5000) // Wait 5 seconds after startup
 
     this.isRunning = true
-    console.log('✅ Auth cleanup service started')
+    console.log('Auth cleanup service started')
   }
 
   /**
@@ -42,7 +42,7 @@ export class AuthCleanupService {
    */
   static stop(): void {
     if (!this.isRunning) {
-      console.log('⚠️  Auth cleanup service is not running')
+      console.log('Auth cleanup service is not running')
       return
     }
 
@@ -64,12 +64,12 @@ export class AuthCleanupService {
       await AuthService.cleanupExpired()
 
       const duration = Date.now() - startTime
-      console.log(`✅ Auth cleanup completed in ${duration}ms`)
+      console.log(`Auth cleanup completed in ${duration}ms`)
 
       // Log cleanup statistics if needed
       await this.logCleanupStats()
     } catch (error) {
-      console.error('❌ Auth cleanup error:', error)
+      console.error('Auth cleanup error:', error)
       throw error
     }
   }

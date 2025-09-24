@@ -9,6 +9,7 @@ export interface EnvironmentConfig {
   NODE_ENV: string
   FRONTEND_URL: string
   JWT_SECRET: string
+  ALLOW_NO_ORIGIN?: string
 
   // Supabase Configuration
   SUPABASE_URL: string
@@ -23,6 +24,11 @@ export interface EnvironmentConfig {
   JIRA_PROJECT_KEY?: string
   GOOGLE_APPLICATION_CREDENTIALS?: string
   GOOGLE_CLOUD_PROJECT_ID?: string
+
+  // Stripe Configuration
+  STRIPE_SECRET_KEY?: string
+  STRIPE_WEBHOOK_SECRET?: string
+  STRIPE_PUBLISHABLE_KEY?: string
 
   // File Upload Configuration
   MAX_FILE_SIZE: number
@@ -46,7 +52,8 @@ const REQUIRED_VARS = [
 const OPTIONAL_SERVICES = {
   OPENAI: ['OPENAI_API_KEY'],
   JIRA: ['JIRA_BASE_URL', 'JIRA_USERNAME', 'JIRA_API_TOKEN', 'JIRA_PROJECT_KEY'],
-  GOOGLE_SPEECH: ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT_ID']
+  GOOGLE_SPEECH: ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT_ID'],
+  STRIPE: ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET']
 }
 
 const PLACEHOLDER_VALUES = [
@@ -61,7 +68,10 @@ const PLACEHOLDER_VALUES = [
   'your-jira-api-token',
   'YOUR_PROJECT_KEY',
   'path-to-your-service-account-key.json',
-  'your-google-cloud-project-id'
+  'your-google-cloud-project-id',
+  'sk_test_your_stripe_secret_key_here',
+  'whsec_your_webhook_secret_here',
+  'pk_test_your_stripe_publishable_key_here'
 ]
 
 function isPlaceholderValue(value: string): boolean {
@@ -98,6 +108,18 @@ function validateJiraURL(url: string): boolean {
   } catch {
     return false
   }
+}
+
+function validateStripeSecretKey(key: string): boolean {
+  return (key.startsWith('sk_test_') || key.startsWith('sk_live_')) &&
+         key.length > 20 &&
+         !isPlaceholderValue(key)
+}
+
+function validateStripeWebhookSecret(secret: string): boolean {
+  return secret.startsWith('whsec_') &&
+         secret.length > 20 &&
+         !isPlaceholderValue(secret)
 }
 
 export function validateEnvironment(): ValidationResult {
@@ -155,6 +177,7 @@ export function validateEnvironment(): ValidationResult {
   config.PORT = parseInt(process.env.PORT || '3000', 10)
   config.NODE_ENV = process.env.NODE_ENV || 'development'
   config.FRONTEND_URL = process.env.FRONTEND_URL || '*'
+  config.ALLOW_NO_ORIGIN = process.env.ALLOW_NO_ORIGIN
   config.MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '10485760', 10)
   config.UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads'
 
@@ -196,16 +219,49 @@ export function validateEnvironment(): ValidationResult {
           config.GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS
           config.GOOGLE_CLOUD_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT_ID
           break
+
+        case 'STRIPE':
+          const stripeSecretKey = process.env.STRIPE_SECRET_KEY!
+          const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET!
+
+          if (!validateStripeSecretKey(stripeSecretKey)) {
+            warnings.push('STRIPE_SECRET_KEY appears to be invalid or a placeholder. Subscription features will be disabled.')
+          } else if (!validateStripeWebhookSecret(stripeWebhookSecret)) {
+            warnings.push('STRIPE_WEBHOOK_SECRET appears to be invalid or a placeholder. Webhook processing will be disabled.')
+          } else {
+            config.STRIPE_SECRET_KEY = stripeSecretKey
+            config.STRIPE_WEBHOOK_SECRET = stripeWebhookSecret
+            config.STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY
+          }
+          break
       }
     } else if (!hasAnyVars) {
       warnings.push(`${serviceName} service is not configured. Related features will be disabled.`)
     }
   }
 
-  // Security warnings for development
+  // Security warnings and checks
   if (config.NODE_ENV === 'development') {
     if (config.FRONTEND_URL === '*') {
       warnings.push('CORS is set to allow all origins (*). This is not recommended for production.')
+    }
+    if (config.ALLOW_NO_ORIGIN === 'true') {
+      warnings.push('ALLOW_NO_ORIGIN is enabled. This allows requests without origin headers.')
+    }
+  }
+
+  // Production security checks
+  if (config.NODE_ENV === 'production') {
+    if (config.FRONTEND_URL === '*') {
+      errors.push('CORS wildcard (*) is not allowed in production. Set specific FRONTEND_URL.')
+    }
+    if (config.ALLOW_NO_ORIGIN === 'true') {
+      warnings.push('ALLOW_NO_ORIGIN is enabled in production. Consider disabling for better security.')
+    }
+    
+    // Check for localhost in production FRONTEND_URL
+    if (config.FRONTEND_URL.includes('localhost') || config.FRONTEND_URL.includes('127.0.0.1')) {
+      warnings.push('Production FRONTEND_URL contains localhost addresses. This may not be intended.')
     }
   }
 
@@ -240,6 +296,7 @@ export function printValidationResults(result: ValidationResult): void {
   console.log(`  • OpenAI: ${result.config.OPENAI_API_KEY ? '✅ Enabled' : '⚠️  Disabled'}`)
   console.log(`  • Jira: ${result.config.JIRA_BASE_URL ? '✅ Enabled' : '⚠️  Disabled'}`)
   console.log(`  • Google Speech: ${result.config.GOOGLE_APPLICATION_CREDENTIALS ? '✅ Enabled' : '⚠️  Disabled'}`)
-  
+  console.log(`  • Stripe: ${result.config.STRIPE_SECRET_KEY ? '✅ Enabled' : '⚠️  Disabled'}`)
+
   console.log('=====================================\n')
 }

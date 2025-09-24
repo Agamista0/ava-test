@@ -32,13 +32,13 @@ router.post('/enable-2fa', [
   authRateLimit
 ], async (req: AuthenticatedRequest, res: Response) => {
   try {
-    if (!req.user?.id || !req.user?.email  ) {
+    if (!req.user?.id || !req.user?.name  ) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
     
 
     // Generate 2FA secret and QR code
-    const twoFAData = await TwoFAService.generateSecret(req.user.id, req.user.email)
+    const twoFAData = await TwoFAService.generateSecret(req.user.id, req.user.name)
 
     // Log security event
     await AuthService.logSecurityEvent(

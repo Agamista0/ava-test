@@ -1,6 +1,7 @@
-import { Router } from 'express'
+import { Router, Request, Response } from 'express'
 import { z } from 'zod'
 import { createUserClient, supabaseAdmin } from '../../lib/supabase'
+import { supportUpload, handleSupportUploadError, processSupportFiles, cleanupSupportFiles } from '../../middleware/supportUpload'
 const router = Router()
 
 // Debug endpoint to verify routes are working
@@ -38,16 +39,32 @@ const createSupportRequestSchema = z.object({
   priority: z.enum(['low', 'medium', 'high']).optional(),
 })
 
-// Create support request endpoint
-router.post('/requests', async (req, res) => {
+// Create support request endpoint (with file upload support)
+router.post('/requests', 
+  supportUpload.array('attachments', 5),
+  handleSupportUploadError,
+  processSupportFiles,
+  async (req: Request, res: Response) => {
   try {
     console.log('POST /api/support/requests - Request received')
     console.log('Headers:', req.headers)
     console.log('Body:', req.body)
+    console.log('Files:', req.files)
+    console.log('Files length:', Array.isArray(req.files) ? req.files.length : 0)
+    if (Array.isArray(req.files) && req.files.length > 0) {
+      console.log('File details:', req.files.map((f: any) => ({ 
+        fieldname: f.fieldname, 
+        originalname: f.originalname, 
+        filename: f.filename, 
+        size: f.size 
+      })))
+    }
     
     const authHeader = req.headers.authorization
     if (!authHeader?.startsWith('Bearer ')) {
       console.log('No authorization header found')
+      // Cleanup uploaded files if auth fails
+      if (req.files) cleanupSupportFiles(req.files as Express.Multer.File[])
       return res.status(401).json({ error: 'Authorization token required' })
     }
 
@@ -60,6 +77,8 @@ router.post('/requests', async (req, res) => {
     
     if (authError || !user) {
       console.log('Auth error:', authError)
+      // Cleanup uploaded files if auth fails
+      if (req.files) cleanupSupportFiles(req.files as Express.Multer.File[])
       return res.status(401).json({ error: 'Invalid authentication token' })
     }
 
@@ -73,25 +92,66 @@ router.post('/requests', async (req, res) => {
       const requestData = createSupportRequestSchema.parse(req.body)
       console.log('Request data validated:', requestData)
 
-      // Create the support request using admin client
+      // Create the support request using admin client (with attachments if column exists)
+      const insertData: any = {
+        user_id: user.id,
+        category: requestData.category,
+        title: requestData.title,
+        description: requestData.description,
+        priority: requestData.priority,
+        status: 'pending'
+      }
+
+      // Only add attachments if we have them and the column exists
+      if (req.body.attachments && req.body.attachments.length > 0) {
+        insertData.attachments = req.body.attachments
+      }
+
       const { data, error } = await supabaseAdmin
         .from('support_requests')
-        .insert({
-          user_id: user.id,
-          category: requestData.category,
-          title: requestData.title,
-          description: requestData.description,
-          priority: requestData.priority,
-          status: 'pending'
-        })
+        .insert(insertData)
         .select('*')
         .single()
 
       if (error) {
-        console.error('Database error:', error)
-        return res.status(500).json({ 
-          error: 'Failed to create support request' 
-        })
+        // If error is about missing attachments column, try without it
+        if (error.message.includes("attachments")) {
+          console.log('Attachments column not found, creating request without attachments')
+          delete insertData.attachments
+          
+          const { data: retryData, error: retryError } = await supabaseAdmin
+            .from('support_requests')
+            .insert(insertData)
+            .select('*')
+            .single()
+            
+          if (retryError) {
+            console.error('Retry database error:', retryError)
+            // Cleanup uploaded files if database insert fails
+            if (req.files) cleanupSupportFiles(req.files as Express.Multer.File[])
+            return res.status(500).json({ 
+              error: 'Failed to create support request' 
+            })
+          }
+          
+          console.log('Support request created successfully without attachments:', retryData.id)
+          if (req.body.attachments && req.body.attachments.length > 0) {
+            console.log(`Note: ${req.body.attachments.length} files were uploaded but not stored in database (attachments column missing)`)
+          }
+          
+          return res.status(201).json({
+            message: 'Support request created successfully',
+            request: retryData,
+            note: req.body.attachments && req.body.attachments.length > 0 ? 'Files were uploaded but not stored (database column missing)' : undefined
+          })
+        } else {
+          console.error('Database error:', error)
+          // Cleanup uploaded files if database insert fails
+          if (req.files) cleanupSupportFiles(req.files as Express.Multer.File[])
+          return res.status(500).json({ 
+            error: 'Failed to create support request' 
+          })
+        }
       }
 
       console.log('Support request created successfully:', data.id)
@@ -101,6 +161,8 @@ router.post('/requests', async (req, res) => {
       })
     } catch (validationError) {
       console.error('Validation error details:', validationError)
+      // Cleanup uploaded files if validation fails
+      if (req.files) cleanupSupportFiles(req.files as Express.Multer.File[])
       
       if (validationError instanceof z.ZodError) {
         return res.status(400).json({ 
@@ -117,6 +179,8 @@ router.post('/requests', async (req, res) => {
     }
   } catch (error) {
     console.error('Create request error:', error)
+    // Cleanup uploaded files if unexpected error occurs
+    if (req.files) cleanupSupportFiles(req.files as Express.Multer.File[])
     
     res.status(500).json({ 
       error: 'Internal server error' 

@@ -2,6 +2,12 @@ import { Router, Response, Request } from 'express'
 import fs from 'fs'
 import path from 'path'
 import { upload, handleUploadError, validateAudioFile, cleanupTempFiles } from '@/middleware/upload'
+import { 
+  getSafeFilePathForServing, 
+  AUDIO_CONFIG,
+  sanitizeFilename,
+  constructSafeFilePath 
+} from '@/utils/securePathUtils'
 import { ConversationService } from '@/services/conversation'
 import { OpenAIService } from '@/services/openai'
 import { SpeechService } from '@/services/speech'
@@ -57,18 +63,13 @@ router.use(chatRateLimit)
 router.get('/audio/:filename', (req: Request, res: Response) => {
   try {
     const filename = req.params.filename;
-    const audioDir = path.join(process.cwd(), 'uploads', 'audio');
-    const filePath = path.join(audioDir, filename);
     
-    // Security check: ensure the filename doesn't contain path traversal
-    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-      return res.status(400).json({ error: 'Invalid filename' });
-    }
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Audio file not found' });
-    }
+    // Use secure path utilities to get a safe file path
+    const safeFilePath = getSafeFilePathForServing(
+      AUDIO_CONFIG.baseDirectory,
+      filename,
+      AUDIO_CONFIG.allowedExtensions
+    );
     
     // Set appropriate headers for audio files
     const ext = path.extname(filename).toLowerCase();
@@ -87,15 +88,35 @@ router.get('/audio/:filename', (req: Request, res: Response) => {
       case '.ogg':
         mimeType = 'audio/ogg';
         break;
+      case '.flac':
+        mimeType = 'audio/flac';
+        break;
     }
     
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'private, no-cache');
     
-    // Send the file
-    res.sendFile(filePath);
+    // Send the file using the validated safe path
+    res.sendFile(safeFilePath);
   } catch (error) {
     console.error('Error serving audio file:', error);
+    
+    // Return appropriate error based on the error message
+    if (error instanceof Error) {
+      if (error.message.includes('Invalid filename') || 
+          error.message.includes('path traversal') ||
+          error.message.includes('invalid characters')) {
+        return res.status(400).json({ error: 'Invalid filename' });
+      }
+      if (error.message.includes('File not found')) {
+        return res.status(404).json({ error: 'Audio file not found' });
+      }
+      if (error.message.includes('File extension not allowed')) {
+        return res.status(400).json({ error: 'File type not supported' });
+      }
+    }
+    
     res.status(500).json({ error: 'Failed to serve audio file' });
   }
 });
@@ -190,7 +211,9 @@ router.post('/send-message',
             })
           }
 
-          // Check if file exists at the path
+          // Check if file exists at the path (validate that the upload was successful)
+          // Note: audioFile.path is controlled by multer middleware, not user input
+          // but we still validate it exists and is accessible
           if (!fs.existsSync(audioFile.path)) {
             console.error('❌ Audio file not found at path:', audioFile.path)
             return res.status(400).json({ 
@@ -221,7 +244,7 @@ router.post('/send-message',
           messageType = 'voice'
           
           // Create audio storage directory if it doesn't exist
-          const audioDir = path.join(process.cwd(), 'uploads', 'audio');
+          const audioDir = AUDIO_CONFIG.baseDirectory;
           if (!fs.existsSync(audioDir)) {
             fs.mkdirSync(audioDir, { recursive: true });
           }
@@ -230,8 +253,12 @@ router.post('/send-message',
           const timestamp = Date.now();
           const randomId = Math.random().toString(36).substring(2, 11);
           const fileExtension = path.extname(audioFile.originalname) || '.mp3';
-          const permanentFileName = `audio_${timestamp}_${randomId}${fileExtension}`;
-          const permanentFilePath = path.join(audioDir, permanentFileName);
+          
+          // Sanitize the generated filename
+          const permanentFileName = sanitizeFilename(`audio_${timestamp}_${randomId}${fileExtension}`);
+          
+          // Use secure path construction
+          const permanentFilePath = constructSafeFilePath(audioDir, permanentFileName);
           
           // Copy the uploaded file to permanent storage
           fs.copyFileSync(audioFile.path, permanentFilePath);
