@@ -56,6 +56,17 @@ CREATE TABLE public.conversations (
   CONSTRAINT conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
   CONSTRAINT conversations_support_id_fkey FOREIGN KEY (support_id) REFERENCES auth.users(id)
 );
+CREATE TABLE public.credits_usage_history (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  credits_used integer NOT NULL,
+  action_type text NOT NULL,
+  description text,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT credits_usage_history_pkey PRIMARY KEY (id),
+  CONSTRAINT credits_usage_history_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
 CREATE TABLE public.login_attempts (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   email text NOT NULL,
@@ -109,6 +120,13 @@ CREATE TABLE public.profiles (
   phone_number text,
   country text,
   city text,
+  stripe_customer_id text UNIQUE CHECK (stripe_customer_id IS NULL OR stripe_customer_id ~~ 'cus_%'::text),
+  credits integer DEFAULT 0,
+  plan_type text DEFAULT 'free'::text,
+  subscription_id text,
+  subscription_status text DEFAULT 'inactive'::text,
+  max_credits integer DEFAULT 80,
+  account_status text DEFAULT 'active'::text,
   CONSTRAINT profiles_pkey PRIMARY KEY (id),
   CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );
@@ -124,6 +142,32 @@ CREATE TABLE public.security_events (
   CONSTRAINT security_events_pkey PRIMARY KEY (id),
   CONSTRAINT security_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
+CREATE TABLE public.stripe_webhook_events (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  stripe_event_id text NOT NULL UNIQUE,
+  event_type text NOT NULL,
+  processed_at timestamp with time zone DEFAULT now(),
+  data jsonb NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT stripe_webhook_events_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.subscription_plans (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  stripe_product_id text NOT NULL UNIQUE,
+  stripe_price_id text NOT NULL UNIQUE,
+  plan_name text NOT NULL CHECK (plan_name = ANY (ARRAY['starting'::text, 'scaling'::text, 'summit'::text])),
+  display_name text NOT NULL,
+  description text,
+  price_amount integer NOT NULL,
+  currency text NOT NULL DEFAULT 'usd'::text,
+  billing_interval text NOT NULL CHECK (billing_interval = ANY (ARRAY['month'::text, 'year'::text])),
+  credits_included integer NOT NULL,
+  features jsonb DEFAULT '{}'::jsonb,
+  is_active boolean DEFAULT true,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT subscription_plans_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.support_requests (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
@@ -138,6 +182,7 @@ CREATE TABLE public.support_requests (
   updated_at timestamp with time zone DEFAULT now(),
   resolved_at timestamp with time zone,
   metadata jsonb DEFAULT '{}'::jsonb,
+  attachments jsonb DEFAULT '[]'::jsonb,
   CONSTRAINT support_requests_pkey PRIMARY KEY (id),
   CONSTRAINT support_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
   CONSTRAINT support_requests_assigned_to_fkey FOREIGN KEY (assigned_to) REFERENCES auth.users(id)
@@ -153,4 +198,38 @@ CREATE TABLE public.user_2fa (
   created_at timestamp with time zone DEFAULT now(),
   CONSTRAINT user_2fa_pkey PRIMARY KEY (id),
   CONSTRAINT user_2fa_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.user_credits (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL UNIQUE,
+  current_credits integer NOT NULL DEFAULT 0,
+  total_credits_allocated integer NOT NULL DEFAULT 0,
+  credits_used integer NOT NULL DEFAULT 0,
+  last_reset_date timestamp with time zone DEFAULT now(),
+  next_reset_date timestamp with time zone,
+  subscription_id uuid,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT user_credits_pkey PRIMARY KEY (id),
+  CONSTRAINT user_credits_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT user_credits_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES public.user_subscriptions(id)
+);
+CREATE TABLE public.user_subscriptions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  stripe_customer_id text NOT NULL,
+  stripe_subscription_id text NOT NULL UNIQUE,
+  plan_id uuid NOT NULL,
+  status text NOT NULL CHECK (status = ANY (ARRAY['active'::text, 'canceled'::text, 'incomplete'::text, 'incomplete_expired'::text, 'past_due'::text, 'trialing'::text, 'unpaid'::text])),
+  current_period_start timestamp with time zone NOT NULL,
+  current_period_end timestamp with time zone NOT NULL,
+  cancel_at_period_end boolean DEFAULT false,
+  canceled_at timestamp with time zone,
+  trial_start timestamp with time zone,
+  trial_end timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT user_subscriptions_pkey PRIMARY KEY (id),
+  CONSTRAINT user_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT user_subscriptions_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.subscription_plans(id)
 );

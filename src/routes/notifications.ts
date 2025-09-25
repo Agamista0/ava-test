@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { body, param, query, validationResult } from 'express-validator';
 import { authenticateUser, requireRole, AuthenticatedRequest } from '../middleware/auth';
 import { supabaseAdmin } from '../lib/supabase';
@@ -18,7 +18,7 @@ import {
 const router = Router();
 
 // Middleware to handle validation errors
-const handleValidationErrors = (req: AuthenticatedRequest, res: Response, next: any) => {
+const handleValidationErrors = (req: Request, res: Response, next: any) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ error: 'Validation failed', details: errors.array() });
@@ -30,9 +30,10 @@ const handleValidationErrors = (req: AuthenticatedRequest, res: Response, next: 
  * GET /api/notifications/preferences
  * Get user's notification preferences
  */
-router.get('/preferences', authenticateUser, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/preferences', authenticateUser, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    const userId = req.user?.id;
+    const userId = authReq.user?.id;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -72,9 +73,10 @@ router.put('/preferences',
   body('quietHoursEnd').optional().matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/),
   body('timezone').optional().isString(),
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
     try {
-      const userId = req.user?.id;
+      const userId = authReq.user?.id;
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
@@ -142,9 +144,10 @@ router.get('/history',
   query('offset').optional().isInt({ min: 0 }),
   query('type').optional().isString(),
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
     try {
-      const userId = req.user?.id;
+      const userId = authReq.user?.id;
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
@@ -196,7 +199,8 @@ router.post('/send',
   body('type').optional().isString(),
   body('data').optional().isObject(),
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
     try {
       const { userId, role, title, message, type = 'system_announcement', data } = req.body;
 
@@ -245,9 +249,10 @@ router.post('/register-device',
   body('appVersion').optional().isString(),
   body('osVersion').optional().isString(),
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
     try {
-      const userId = req.user?.id;
+      const userId = authReq.user?.id;
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
@@ -287,7 +292,8 @@ router.post('/register-device',
  * GET /api/notifications/types
  * Get available notification types
  */
-router.get('/types', authenticateUser, async (req: AuthenticatedRequest, res: Response) => {
+router.get('/types', authenticateUser, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { data, error } = await supabaseAdmin
       .from('notification_types')

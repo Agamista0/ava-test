@@ -4,7 +4,11 @@ import { supabaseAdmin } from '@/lib'
 import { AuthService, TokenPayload } from '@/services/auth'
 
 export interface AuthenticatedRequest extends Request {
-  user?: any  // Use any to avoid conflicts with Express's user type
+  user?: {
+    sub: string
+    role: 'user' | 'support'
+    [key: string]: any
+  }
   tokenPayload?: TokenPayload
   sessionId?: string
 }
@@ -65,7 +69,12 @@ export const authenticateUser = async (
       await AuthService.updateSessionActivity(tokenPayload.sessionId)
     }
 
-    authReq.user = user
+    authReq.user = {
+      sub: user.id,
+      role: tokenPayload.role,
+      email: user.email,
+      ...user
+    } as any
     authReq.tokenPayload = tokenPayload
     authReq.sessionId = tokenPayload.sessionId
     next()
@@ -91,7 +100,12 @@ export const optionalAuth = async (
       if (tokenPayload) {
         const { data: { user } } = await supabaseAdmin.auth.admin.getUserById(tokenPayload.sub)
         if (user) {
-          authReq.user = user
+          authReq.user = {
+            sub: user.id,
+            role: tokenPayload.role,
+            email: user.email,
+            ...user
+          } as any
           authReq.tokenPayload = tokenPayload
           authReq.sessionId = tokenPayload.sessionId
 
