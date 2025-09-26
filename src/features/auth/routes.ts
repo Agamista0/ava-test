@@ -17,7 +17,7 @@ const router = Router()
 
 // Apply auth rate limiting to all routes
 
-router.use(authRateLimit)
+// router.use(authRateLimit)
 
 // Register endpoint
 router.post('/register', [

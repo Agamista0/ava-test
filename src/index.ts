@@ -4,14 +4,14 @@ import helmet from 'helmet'
 import compression from 'compression'
 import { supabaseAdmin } from '@/lib'
 import { validateEnvironment, printValidationResults } from '@/lib/env-validation'
-// import {
-//   generalRateLimit,
-//   speedLimiter,
-//   sanitizeInput,
-//   parameterPollutionProtection,
-//   securityHeaders,
-//   securityLogger
-// } from '@/middleware/security'
+import {
+  generalRateLimit,
+  speedLimiter,
+  sanitizeInput,
+  parameterPollutionProtection,
+  securityHeaders,
+  securityLogger
+} from '@/middleware/security'
 import authRoutes from './features/auth/routes'
 import twoFARoutes from './features/auth/twofa-routes'
 import profileRoutes from './features/auth/profile-routes'
@@ -138,7 +138,7 @@ const corsOptions = {
       callback(null, true)
     } else {
       console.warn(`CORS: Origin ${origin} not allowed. Allowed origins:`, allowedOrigins)
-      // securityLogger(null as any, null as any, () => {})
+      securityLogger(null as any, null as any, () => {})
       callback(new Error('Not allowed by CORS'), false)
     }
   },
@@ -225,9 +225,9 @@ app.use(express.json({
 }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
-// // Input sanitization and security
-// app.use(sanitizeInput)
-// app.use(parameterPollutionProtection)
+// Input sanitization and security
+app.use(sanitizeInput)
+app.use(parameterPollutionProtection)
 
 // Health check endpoint
 app.get('/health', (req, res) => {

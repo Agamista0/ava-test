@@ -17,7 +17,7 @@ import {
 const router = Router()
 
 // Apply support rate limiting to all routes
-router.use(supportRateLimit)
+// router.use(supportRateLimit)
 
 // All support routes require support role
 router.use(requireAuth)
