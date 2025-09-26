@@ -1,4 +1,4 @@
-import { Router, Response } from 'express'
+import { Router, Request, Response } from 'express'
 import { body } from 'express-validator'
 import { authenticateUser, AuthenticatedRequest } from '@/middleware/auth'
 import { supabaseAdmin } from '@/lib'
@@ -14,31 +14,18 @@ const router = Router()
 
 router.get('/profile', [
   authenticateUser
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
     // Get user profile from database
     const { data: profile, error } = await supabaseAdmin
       .from('profiles')
-      .select(`
-        id,
-        email,
-        name,
-        role,
-        avatar_url,
-        phone,
-        department,
-        created_at,
-        updated_at,
-        last_login_at,
-        is_active,
-        is_verified,
-        preferences
-      `)
-      .eq('id', req.user.id)
+      .select(`*`)
+      .eq('id', authReq.user.id)
       .single()
 
     if (error || !profile) {
@@ -46,14 +33,14 @@ router.get('/profile', [
     }
 
     // Get 2FA status
-    const is2FAEnabled = await TwoFAService.is2FAEnabled(req.user.id)
-    const twoFAConfig = await TwoFAService.get2FAConfig(req.user.id)
+    const is2FAEnabled = await TwoFAService.is2FAEnabled(authReq.user.id)
+    const twoFAConfig = await TwoFAService.get2FAConfig(authReq.user.id)
 
     // Get active sessions count
     const { data: sessions, error: sessionsError } = await supabaseAdmin
       .from('auth_sessions')
       .select('id, device_info, ip_address, created_at, last_activity')
-      .eq('user_id', req.user.id)
+      .eq('user_id', authReq.user.id)
       .eq('is_active', true)
       .order('last_activity', { ascending: false })
 
@@ -88,9 +75,10 @@ router.put('/profile', [
   body('department').optional().isLength({ max: 100 }).withMessage('Department must be max 100 characters'),
   body('preferences').optional().isObject().withMessage('Preferences must be an object'),
   handleValidationErrors
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
@@ -109,7 +97,7 @@ router.put('/profile', [
     const { data: updatedProfile, error } = await supabaseAdmin
       .from('profiles')
       .update(updateData)
-      .eq('id', req.user.id)
+      .eq('id', authReq.user.id)
       .select()
       .single()
 
@@ -120,7 +108,7 @@ router.put('/profile', [
 
     // Log security event
     await AuthService.logSecurityEvent(
-      req.user.id,
+      authReq.user.id,
       'profile_updated',
       req.ip || 'unknown',
       req.get('User-Agent') || 'unknown',
@@ -145,9 +133,10 @@ router.put('/profile', [
 
 router.get('/sessions', [
   authenticateUser
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
@@ -163,7 +152,7 @@ router.get('/sessions', [
         expires_at,
         is_active
       `)
-      .eq('user_id', req.user.id)
+      .eq('user_id', authReq.user.id)
       .order('last_activity', { ascending: false })
 
     if (error) {
@@ -171,7 +160,7 @@ router.get('/sessions', [
     }
 
     // Mark current session
-    const currentSessionId = req.sessionId
+    const currentSessionId = authReq.sessionId
     const sessionsWithCurrent = sessions.map(session => ({
       ...session,
       isCurrent: session.id === currentSessionId
@@ -193,16 +182,17 @@ router.get('/sessions', [
 
 router.delete('/sessions/:sessionId', [
   authenticateUser
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
     const { sessionId } = req.params
 
     // Don't allow revoking current session via this endpoint
-    if (sessionId === req.sessionId) {
+    if (sessionId === authReq.sessionId) {
       return res.status(400).json({ error: 'Cannot revoke current session. Use logout instead.' })
     }
 
@@ -214,7 +204,7 @@ router.delete('/sessions/:sessionId', [
         updated_at: new Date().toISOString()
       })
       .eq('id', sessionId)
-      .eq('user_id', req.user.id)
+      .eq('user_id', authReq.user.id)
 
     if (error) {
       return res.status(400).json({ error: 'Failed to revoke session' })
@@ -222,7 +212,7 @@ router.delete('/sessions/:sessionId', [
 
     // Log security event
     await AuthService.logSecurityEvent(
-      req.user.id,
+      authReq.user.id,
       'session_revoked',
       req.ip || 'unknown',
       req.get('User-Agent') || 'unknown',
@@ -244,9 +234,10 @@ router.delete('/sessions/:sessionId', [
 
 router.post('/revoke-all-sessions', [
   authenticateUser
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
@@ -257,8 +248,8 @@ router.post('/revoke-all-sessions', [
         is_active: false,
         updated_at: new Date().toISOString()
       })
-      .eq('user_id', req.user.id)
-      .neq('id', req.sessionId || '')
+      .eq('user_id', authReq.user.id)
+      .neq('id', authReq.sessionId || '')
 
     if (error) {
       return res.status(500).json({ error: 'Failed to revoke sessions' })
@@ -266,11 +257,11 @@ router.post('/revoke-all-sessions', [
 
     // Log security event
     await AuthService.logSecurityEvent(
-      req.user.id,
+      authReq.user.id,
       'all_sessions_revoked',
       req.ip || 'unknown',
       req.get('User-Agent') || 'unknown',
-      { current_session_id: req.sessionId },
+      { current_session_id: authReq.sessionId },
       'info'
     )
 

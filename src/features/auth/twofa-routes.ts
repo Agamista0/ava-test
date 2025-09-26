@@ -1,4 +1,4 @@
-import { Router, Response } from 'express'
+import { Router, Request, Response } from 'express'
 import { body, validationResult } from 'express-validator'
 import { authenticateUser, AuthenticatedRequest } from '@/middleware/auth'
 import { TwoFAService } from '@/services/auth/twofa'
@@ -30,19 +30,20 @@ const validateUserId = [
 router.post('/enable-2fa', [
   authenticateUser,
   authRateLimit
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id || !req.user?.name  ) {
+    if (!authReq.user?.id || !authReq.user?.name  ) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
     
 
     // Generate 2FA secret and QR code
-    const twoFAData = await TwoFAService.generateSecret(req.user.id, req.user.name)
+    const twoFAData = await TwoFAService.generateSecret(authReq.user.id, authReq.user.name)
 
     // Log security event
     await AuthService.logSecurityEvent(
-      req.user.id,
+      authReq.user.id,
       '2fa_setup_initiated',
       req.ip || 'unknown',
       req.get('User-Agent') || 'unknown',
@@ -67,22 +68,23 @@ router.post('/enable-2fa', [
 
 router.post('/verify-2fa', [
   authenticateUser,
-  ...validate2FAToken,
-  authRateLimit
-], async (req: AuthenticatedRequest, res: Response) => {
+  authRateLimit,
+  ...validate2FAToken
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
     const { token } = req.body
 
     // Enable 2FA after successful verification
-    const success = await TwoFAService.enable2FA(req.user.id, token)
+    const success = await TwoFAService.enable2FA(authReq.user.id, token)
 
     if (!success) {
       await AuthService.logSecurityEvent(
-        req.user.id,
+        authReq.user.id,
         '2fa_verification_failed',
         req.ip || 'unknown',
         req.get('User-Agent') || 'unknown',
@@ -94,7 +96,7 @@ router.post('/verify-2fa', [
 
     // Log successful 2FA enablement
     await AuthService.logSecurityEvent(
-      req.user.id,
+      authReq.user.id,
       '2fa_enabled',
       req.ip || 'unknown',
       req.get('User-Agent') || 'unknown',
@@ -117,20 +119,21 @@ router.post('/disable-2fa', [
   authenticateUser,
   ...validate2FAToken,
   authRateLimit
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
     const { token } = req.body
 
     // Disable 2FA after successful verification
-    const success = await TwoFAService.disable2FA(req.user.id, token)
+    const success = await TwoFAService.disable2FA(authReq.user.id, token)
 
     if (!success) {
       await AuthService.logSecurityEvent(
-        req.user.id,
+        authReq.user.id,
         '2fa_disable_failed',
         req.ip || 'unknown',
         req.get('User-Agent') || 'unknown',
@@ -142,7 +145,7 @@ router.post('/disable-2fa', [
 
     // Log successful 2FA disablement
     await AuthService.logSecurityEvent(
-      req.user.id,
+      authReq.user.id,
       '2fa_disabled',
       req.ip || 'unknown',
       req.get('User-Agent') || 'unknown',
@@ -165,7 +168,7 @@ router.post('/login-2fa', [
   ...validateUserId,
   ...validate2FAToken,
   authRateLimit
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
   try {
     const { userId, token } = req.body
     const ipAddress = req.ip || 'unknown'
@@ -196,14 +199,15 @@ router.post('/login-2fa', [
 
 router.get('/2fa-status', [
   authenticateUser
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
-    const is2FAEnabled = await TwoFAService.is2FAEnabled(req.user.id)
-    const config = await TwoFAService.get2FAConfig(req.user.id)
+    const is2FAEnabled = await TwoFAService.is2FAEnabled(authReq.user.id)
+    const config = await TwoFAService.get2FAConfig(authReq.user.id)
 
     res.json({
       success: true,
@@ -223,16 +227,17 @@ router.post('/regenerate-backup-codes', [
   authenticateUser,
   ...validate2FAToken,
   authRateLimit
-], async (req: AuthenticatedRequest, res: Response) => {
+], async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
-    if (!req.user?.id) {
+    if (!authReq.user?.id) {
       return res.status(401).json({ error: 'User not authenticated' })
     }
 
     const { token } = req.body
 
     // Regenerate backup codes
-    const newBackupCodes = await TwoFAService.regenerateBackupCodes(req.user.id, token)
+    const newBackupCodes = await TwoFAService.regenerateBackupCodes(authReq.user.id, token)
 
     if (!newBackupCodes) {
       return res.status(400).json({ error: 'Invalid 2FA token' })
@@ -240,7 +245,7 @@ router.post('/regenerate-backup-codes', [
 
     // Log security event
     await AuthService.logSecurityEvent(
-      req.user.id,
+      authReq.user.id,
       '2fa_backup_codes_regenerated',
       req.ip || 'unknown',
       req.get('User-Agent') || 'unknown',

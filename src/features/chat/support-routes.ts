@@ -1,5 +1,6 @@
-import { Router } from 'express'
-import { requireAuth, requireRole, AuthenticatedRequest } from '../auth'
+import { Router, Request, Response } from 'express'
+import { requireAuth, AuthenticatedRequest } from '../auth'
+import { requireRole } from '@/middleware/auth'
 import { ConversationService } from '@/services/conversation'
 import { JiraService } from '@/services/jira'
 import { supabaseAdmin } from '@/lib/supabase'
@@ -20,20 +21,21 @@ router.use(supportRateLimit)
 
 // All support routes require support role
 router.use(requireAuth)
-router.use(requireRole('support'))
+router.use(requireRole(['support']))
 
 // Get all open conversations (for support dashboard)
 router.get('/conversations',
   ...validatePagination,
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res) => {
+  async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { status = 'open' } = req.query
     
     let conversations
     if (status === 'assigned') {
       // Get conversations assigned to this support member
-      conversations = await ConversationService.getSupportConversations(req.user!.sub)
+      conversations = await ConversationService.getSupportConversations(authReq.user!.sub)
     } else {
       // Get all open conversations (this would need a new method in ConversationService)
       // For now, we'll get all conversations and filter
@@ -72,10 +74,11 @@ router.get('/conversations',
 })
 
 // Assign conversation to support member
-router.post('/conversations/:conversationId/assign', async (req: AuthenticatedRequest, res) => {
+router.post('/conversations/:conversationId/assign', async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { conversationId } = req.params
-    const supportId = req.user!.sub
+    const supportId = authReq.user!.sub
 
     const conversation = await ConversationService.assignConversation(conversationId, supportId)
     
@@ -94,7 +97,8 @@ router.post('/conversations/:conversationId/assign', async (req: AuthenticatedRe
 })
 
 // Close conversation
-router.post('/conversations/:conversationId/close', async (req: AuthenticatedRequest, res) => {
+router.post('/conversations/:conversationId/close', async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { conversationId } = req.params
     
@@ -115,7 +119,8 @@ router.post('/conversations/:conversationId/close', async (req: AuthenticatedReq
 })
 
 // Get Jira ticket details
-router.get('/jira-tickets/:ticketId', async (req: AuthenticatedRequest, res) => {
+router.get('/jira-tickets/:ticketId', async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { ticketId } = req.params
     
@@ -140,7 +145,8 @@ router.get('/jira-tickets/:ticketId', async (req: AuthenticatedRequest, res) => 
 })
 
 // Update Jira ticket status
-router.put('/jira-tickets/:ticketId/status', async (req: AuthenticatedRequest, res) => {
+router.put('/jira-tickets/:ticketId/status', async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { ticketId } = req.params
     const { status } = req.body
@@ -162,7 +168,8 @@ router.put('/jira-tickets/:ticketId/status', async (req: AuthenticatedRequest, r
 })
 
 // Add comment to Jira ticket
-router.post('/jira-tickets/:ticketId/comments', async (req: AuthenticatedRequest, res) => {
+router.post('/jira-tickets/:ticketId/comments', async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { ticketId } = req.params
     const { comment } = req.body
@@ -184,11 +191,12 @@ router.post('/jira-tickets/:ticketId/comments', async (req: AuthenticatedRequest
 })
 
 // Support team can also send messages to conversations
-router.post('/conversations/:conversationId/messages', async (req: AuthenticatedRequest, res) => {
+router.post('/conversations/:conversationId/messages', async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
   try {
     const { conversationId } = req.params
     const { message } = req.body
-    const supportId = req.user!.sub
+    const supportId = authReq.user!.sub
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' })

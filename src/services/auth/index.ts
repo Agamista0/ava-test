@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken'
 import crypto from 'crypto'
+import { createClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase'
 import { TwoFAService } from './twofa'
 
@@ -91,6 +92,26 @@ export class AuthService {
    */
   static async verifyToken(token: string): Promise<TokenPayload | null> {
     try {
+      // First try to verify as Supabase token
+      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+      
+      if (!error && user) {
+        // This is a valid Supabase token, convert to our TokenPayload format
+        const { data: profile } = await supabaseAdmin
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+          
+        return {
+          sub: user.id,
+          role: profile?.role || 'user',
+          sessionId: 'supabase-session', // Supabase handles sessions internally
+          iat: user.created_at ? Math.floor(new Date(user.created_at).getTime() / 1000) : undefined,
+        } as TokenPayload;
+      }
+      
+      // If Supabase verification fails, try custom JWT verification
       const decoded = jwt.verify(token, process.env.JWT_SECRET!, {
         issuer: 'ava-chat-system',
         audience: 'ava-chat-users',
@@ -401,8 +422,13 @@ export class AuthService {
     error?: string
   }> {
     try {
-      // Authenticate with Supabase
-      const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password })
+      // Authenticate with Supabase using a temporary client to avoid context pollution
+      const tempAuthClient = createClient(
+        process.env.SUPABASE_URL!,
+        process.env.SUPABASE_ANON_KEY!
+      )
+      
+      const { data, error } = await tempAuthClient.auth.signInWithPassword({ email, password })
 
       if (error || !data.user) {
         await this.logLoginAttempt(email, ipAddress, userAgent, false, error?.message)
@@ -417,6 +443,7 @@ export class AuthService {
         .single()
 
       if (profileError || !profile) {
+        console.error('Profile lookup error:', profileError)
         await this.logLoginAttempt(email, ipAddress, userAgent, false, 'Profile not found')
         return { success: false, error: 'Profile not found' }
       }

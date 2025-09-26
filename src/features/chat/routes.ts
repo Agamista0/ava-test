@@ -12,7 +12,8 @@ import { ConversationService } from '@/services/conversation'
 import { OpenAIService } from '@/services/openai'
 import { SpeechService } from '@/services/speech'
 import { JiraService } from '@/services/jira'
-import { supabaseAdmin, createUserClient } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabase'
+import { authenticateUser, AuthenticatedRequest } from '@/middleware/auth'
 import {
   chatRateLimit,
   validateMessage,
@@ -22,42 +23,10 @@ import {
   validateFileUpload
 } from '@/middleware/security'
 
-// Interface for authenticated request
-interface AuthenticatedRequest extends Request {
-  user?: any
-}
-
 const router = Router()
 
-// Authentication helper for chat routes
-const requireSupabaseAuth = async (req: any, res: any, next: any) => {
-  try {
-    const authHeader = req.headers.authorization
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' })
-    }
-
-    const token = authHeader.split(' ')[1]
-    
-    // Verify the user is authenticated using Supabase
-    const userClient = createUserClient(token)
-    const { data: { user }, error: authError } = await userClient.auth.getUser()
-    
-    if (authError || !user) {
-      return res.status(401).json({ error: 'Invalid authentication token' })
-    }
-
-    // Add user to request object
-    req.user = user
-    next()
-  } catch (error) {
-    console.error('Authentication error:', error)
-    res.status(401).json({ error: 'Authentication failed' })
-  }
-}
-
 // Apply chat rate limiting to all routes
-router.use(chatRateLimit)
+// router.use(chatRateLimit)
 
 // Serve audio files
 router.get('/audio/:filename', (req: Request, res: Response) => {
@@ -123,10 +92,11 @@ router.get('/audio/:filename', (req: Request, res: Response) => {
 
 // Start new conversation endpoint
 router.post('/start-conversation',
-  requireSupabaseAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest
     try {
-      const userId = req.user!.id
+      const userId = authReq.user!.sub
 
       // Create a new conversation
       const conversation = await ConversationService.createConversation(userId)
@@ -150,16 +120,17 @@ router.post('/start-conversation',
 
 // Send message endpoint (handles both text and voice)
 router.post('/send-message',
-  requireSupabaseAuth,
+  authenticateUser,
   upload.single('audio'),
   handleUploadError,
   validateAudioFile,
   validateFileUpload,
   validateMessage,
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest
     try {
-      const userId = req.user!.id
+      const userId = authReq.user!.sub
       const { message, conversationId } = req.body
       const audioFile = req.file
 
@@ -194,7 +165,7 @@ router.post('/send-message',
       if (audioFile) {
         try {
           // Log detailed file information
-          console.log('📁 Uploaded audio file info:', {
+          console.log('Uploaded audio file info:', {
             originalname: audioFile.originalname,
             mimetype: audioFile.mimetype,
             size: audioFile.size,
@@ -223,20 +194,20 @@ router.post('/send-message',
 
           // Check file stats
           const fileStats = fs.statSync(audioFile.path)
-          console.log('📊 File stats:', {
+          console.log('File stats:', {
             size: fileStats.size,
             isFile: fileStats.isFile(),
             modified: fileStats.mtime
           })
 
           if (fileStats.size === 0) {
-            console.error('❌ Audio file on disk is empty!')
+            console.error('Audio file on disk is empty!')
             return res.status(400).json({ 
               error: 'Audio file appears to be empty. Please try recording again.' 
             })
           }
 
-          console.log('✅ Audio file validation passed, proceeding with transcription...')
+          console.log('Audio file validation passed, proceeding with transcription...')
 
           // Convert audio to text
           messageText = await SpeechService.transcribeAudioFile(audioFile.path);
@@ -389,14 +360,15 @@ router.post('/send-message',
 
 // Get conversation messages
 router.get('/conversation/:conversationId/messages',
-  requireSupabaseAuth,
+  authenticateUser,
   validateConversationId,
   validatePagination,
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest
     try {
       const { conversationId } = req.params
-      const userId = req.user!.id
+      const userId = authReq.user!.sub
 
       // Verify user has access to this conversation
       const conversation = await ConversationService.getConversation(conversationId)
@@ -431,12 +403,13 @@ router.get('/conversation/:conversationId/messages',
 
 // Get user's conversations
 router.get('/conversations',
-  requireSupabaseAuth,
+  authenticateUser,
   validatePagination,
   handleValidationErrors,
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest
     try {
-      const userId = req.user!.id
+      const userId = authReq.user!.sub
       const conversations = await ConversationService.getUserConversations(userId)
       
       res.json({
@@ -457,10 +430,11 @@ router.get('/conversations',
 
 // Get current conversation (latest open conversation)
 router.get('/current-conversation', 
-  requireSupabaseAuth,
-  async (req: AuthenticatedRequest, res) => {
+  authenticateUser,
+  async (req: Request, res) => {
+    const authReq = req as AuthenticatedRequest
     try {
-      const userId = req.user!.id
+      const userId = authReq.user!.sub
       const conversation = await ConversationService.getOrCreateConversation(userId)
       
       // Get messages for this conversation
